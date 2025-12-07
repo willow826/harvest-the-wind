@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Virtual Micro-Grid</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: linear-gradient(to bottom, #1a2a33 0%, #2f4f4f 100%);
+            font-family: 'Courier New', Courier, monospace;
+            cursor: none; /* 隐藏默认鼠标，用网兜代替 */
+        }
+
+        #canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        /* 界面 UI */
+        #ui {
+            position: absolute;
+            top: 30px;
+            left: 30px;
+            color: rgba(255,255,255,0.8);
+            z-index: 10;
+            pointer-events: none;
+        }
+        h1 { font-size: 24px; margin: 0 0 10px 0; letter-spacing: 2px; }
+        p { font-size: 14px; color: rgba(255,255,255,0.5); margin: 5px 0; }
+
+        /* 能量灯泡容器 */
+        #energy-display {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 10;
+        }
+
+        /* 灯泡样式 */
+        #bulb {
+            width: 60px;
+            height: 60px;
+            background: #333;
+            border-radius: 50%;
+            border: 2px solid #555;
+            margin-bottom: 10px;
+            transition: all 0.1s;
+            box-shadow: 0 0 0px rgba(255, 223, 0, 0);
+            position: relative;
+        }
+
+        #bulb::after {
+            content: '';
+            position: absolute;
+            bottom: -15px;
+            left: 15px;
+            width: 30px;
+            height: 15px;
+            background: #222;
+            border-radius: 2px;
+        }
+
+        #energy-text {
+            color: #fff;
+            font-size: 12px;
+            margin-top: 20px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* 开始按钮层 */
+        #start-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 20;
+            backdrop-filter: blur(8px);
+            transition: opacity 0.5s;
+            text-align: center;
+            color: white;
+        }
+
+        .btn {
+            padding: 15px 40px;
+            border: 1px solid rgba(255,255,255,0.6);
+            background: rgba(255,255,255,0.1);
+            color: white;
+            font-family: inherit;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 20px;
+            letter-spacing: 2px;
+        }
+        .btn:hover { background: white; color: black; }
+
+        .hint {
+            font-size: 12px;
+            color: rgba(255,255,255,0.6);
+            margin-top: 5px;
+            line-height: 1.6;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="start-overlay">
+        <!-- 按钮改回 Start Harvesting -->
+        <button class="btn" id="start-btn">Start Harvesting</button>
+        <div class="hint">Use your net to catch leaves and generate light.</div>
+        <div class="hint" style="opacity: 0.7;">(🎧 Best experienced with headphones)</div>
+    </div>
+
+    <div id="ui">
+        <h1>THE VIRTUAL<br>MICRO-GRID</h1>
+        <p>System Status: <span id="status-text">WAITING...</span></p>
+        <p>Wind Velocity: <span id="speed-text">0</span> m/s</p>
+    </div>
+
+    <div id="energy-display">
+        <div id="bulb"></div>
+        <div id="energy-text">Stored Energy</div>
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const bulb = document.getElementById('bulb');
+        const statusText = document.getElementById('status-text');
+        const speedText = document.getElementById('speed-text');
+        
+        let width, height;
+        let particles = [];
+        let globalWind = { x: 0, y: 0 }; 
+        let energy = 0; 
+        const mouse = { x: -100, y: -100 };
+
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        window.addEventListener('mousemove', e => {
+            mouse.x = e.clientX;
+            mouse.y = e.clientY;
+        });
+
+        // --- 树叶粒子系统 ---
+        class Particle {
+            constructor() {
+                this.init(true);
+            }
+
+            init(randomY = false) {
+                const rand = Math.random();
+                if (rand < 0.2) this.type = 'paper';
+                else if (rand < 0.5) this.type = 'maple';
+                else if (rand < 0.75) this.type = 'oak';
+                else this.type = 'willow';
+
+                this.x = Math.random() * width;
+                this.y = randomY ? Math.random() * height : -60;
+                
+                this.baseVx = (Math.random() - 0.5) * 1.5; 
+                this.baseVy = Math.random() * 1.5 + 1; 
+                this.vx = this.baseVx;
+                this.vy = this.baseVy;
+                
+                this.size = Math.random() * 10 + 6;
+                if(this.type === 'maple') this.size *= 1.4;
+
+                this.angle = Math.random() * Math.PI * 2; 
+                this.spin = (Math.random() - 0.5) * 0.05;
+                this.flip = Math.random() * Math.PI;      
+                this.flipSpeed = Math.random() * 0.05;
+
+                // 颜色
+                if (this.type === 'paper') {
+                     this.color = `rgba(255, 255, 255, ${Math.random() * 0.4 + 0.6})`;
+                } else if (this.type === 'maple') {
+                    const colors = ['#D94C23', '#E67E22', '#C0392B', '#A93226'];
+                    this.color = colors[Math.floor(Math.random() * colors.length)];
+                } else if (this.type === 'oak') {
+                    const colors = ['#8E6E34', '#A08246', '#CD853F', '#8B4513'];
+                    this.color = colors[Math.floor(Math.random() * colors.length)];
+                } else { 
+                    this.color = '#6B8E23';
+                }
+            }
+
+            update() {
+                let targetVx = this.baseVx + globalWind.x;
+                let targetVy = this.baseVy + globalWind.y;
+
+                this.vx += (targetVx - this.vx) * 0.05;
+                this.vy += (targetVy - this.vy) * 0.05;
+
+                this.x += this.vx;
+                this.y += this.vy;
+                this.angle += this.spin;
+                this.flip += this.flipSpeed; 
+
+                if (this.y > height + 50 || this.x > width + 50 || this.x < -50) {
+                    this.init();
+                }
+
+                // 捕获逻辑
+                let dx = this.x - mouse.x;
+                let dy = this.y - (mouse.y - 40); 
+                let dist = Math.sqrt(dx*dx + dy*dy);
+
+                if (dist < 50) { 
+                    this.caught();
+                }
+            }
+
+            caught() {
+                energy = Math.min(energy + 8, 100); 
+                createSpark(this.x, this.y, this.color);
+                this.init(); 
+                this.y = -60; 
+                playPing();
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+                ctx.scale(1, Math.abs(Math.cos(this.flip))); 
+                
+                ctx.fillStyle = this.color;
+                
+                const s = this.size;
+
+                if (this.type === 'paper') {
+                    ctx.fillRect(-s/2, -s/2, s, s * 1.2);
+                } 
+                else if (this.type === 'maple') {
+                    ctx.beginPath();
+                    ctx.moveTo(0, s * 0.3);
+                    ctx.quadraticCurveTo(-s * 0.2, s * 0.2, -s * 0.5, s * 0.4); 
+                    ctx.lineTo(-s * 0.4, s * 0.1); 
+                    ctx.quadraticCurveTo(-s * 0.3, 0, -s * 0.9, -s * 0.3); 
+                    ctx.lineTo(-s * 0.3, -s * 0.3);
+                    ctx.quadraticCurveTo(-s * 0.1, -s * 0.5, 0, -s); 
+                    ctx.quadraticCurveTo(s * 0.1, -s * 0.5, s * 0.3, -s * 0.3);
+                    ctx.lineTo(s * 0.9, -s * 0.3);
+                    ctx.quadraticCurveTo(s * 0.3, 0, s * 0.4, s * 0.1);
+                    ctx.lineTo(s * 0.5, s * 0.4);
+                    ctx.quadraticCurveTo(s * 0.2, s * 0.2, 0, s * 0.3);
+                    ctx.fill();
+                }
+                else if (this.type === 'oak') {
+                    ctx.beginPath();
+                    ctx.moveTo(0, -s); 
+                    ctx.bezierCurveTo(s*0.5, -s*0.8, s*0.6, -s*0.5, s*0.3, -s*0.3);
+                    ctx.bezierCurveTo(s*0.8, -s*0.1, s*0.8, s*0.2, s*0.2, s*0.4);
+                    ctx.lineTo(0, s*0.8);
+                    ctx.bezierCurveTo(-s*0.8, s*0.2, -s*0.8, -s*0.1, -s*0.3, -s*0.3);
+                    ctx.bezierCurveTo(-s*0.6, -s*0.5, -s*0.5, -s*0.8, 0, -s);
+                    ctx.fill();
+                }
+                else if (this.type === 'willow') {
+                    ctx.beginPath();
+                    ctx.ellipse(0, 0, s/3, s, 0, 0, Math.PI*2);
+                    ctx.fill();
+                }
+
+                ctx.restore();
+            }
+        }
+
+        let sparks = [];
+        function createSpark(x, y, color) {
+            for(let i=0; i<4; i++) {
+                sparks.push({
+                    x: x, y: y,
+                    vx: (Math.random()-0.5)*8,
+                    vy: (Math.random()-0.5)*8,
+                    life: 1.0,
+                    color: color
+                });
+            }
+        }
+
+        function drawNet() {
+            ctx.save();
+            ctx.translate(mouse.x, mouse.y);
+            ctx.rotate(-0.3); 
+
+            ctx.strokeStyle = '#eee';
+            ctx.lineWidth = 2.5;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            // Handle
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.quadraticCurveTo(5, 50, 10, 120); 
+            ctx.stroke();
+
+            // Rim
+            ctx.beginPath();
+            ctx.ellipse(0, -50, 45, 40, 0, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Mesh
+            ctx.lineWidth = 0.8;
+            ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+            ctx.beginPath();
+            for(let i=-30; i<=30; i+=15) {
+                ctx.moveTo(i, -80);
+                ctx.quadraticCurveTo(i*0.5, -50, i*0.2, -10);
+            }
+            for(let j=-80; j<=-20; j+=15) {
+                ctx.moveTo(-40, j);
+                ctx.quadraticCurveTo(0, j+10, 40, j);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        for (let i = 0; i < 60; i++) particles.push(new Particle());
+
+        function animate() {
+            ctx.clearRect(0, 0, width, height);
+            updateWind();
+
+            particles.forEach(p => {
+                p.update();
+                p.draw();
+            });
+
+            for(let i=sparks.length-1; i>=0; i--) {
+                let s = sparks[i];
+                s.x += s.vx; s.y += s.vy;
+                s.life -= 0.05;
+                ctx.fillStyle = s.color;
+                ctx.globalAlpha = s.life;
+                ctx.fillRect(s.x, s.y, 2, 2);
+                ctx.globalAlpha = 1;
+                if(s.life <= 0) sparks.splice(i, 1);
+            }
+
+            drawNet();
+            updateBulb();
+            requestAnimationFrame(animate);
+        }
+
+        let windTimer = 0;
+        function updateWind() {
+            windTimer++;
+            if (windTimer % 200 === 0 && Math.random() < 0.5) {
+                globalWind.x = (Math.random() - 0.5) * 8;
+                statusText.innerText = "GUST DETECTED!";
+                statusText.style.color = "#ffeb3b";
+            } else {
+                globalWind.x *= 0.98; 
+                if (Math.abs(globalWind.x) < 0.5) {
+                    statusText.innerText = "HARVESTING...";
+                    statusText.style.color = "#fff";
+                }
+            }
+            speedText.innerText = (Math.abs(globalWind.x)).toFixed(1);
+        }
+
+        function updateBulb() {
+            if (energy > 0) energy -= 0.3; 
+            let brightness = energy / 100;
+            let glowSize = energy / 1.5;
+            bulb.style.backgroundColor = `rgba(255, 235, 59, ${0.1 + brightness})`;
+            bulb.style.boxShadow = `0 0 ${glowSize}px ${glowSize/2}px rgba(255, 235, 59, ${brightness})`;
+        }
+
+        // --- Audio System ---
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        let audioCtx;
+        
+        function initAudio() {
+            audioCtx = new AudioContext();
+            
+            // 1. Background Wind Noise (大音量)
+            const bufferSize = audioCtx.sampleRate * 2;
+            const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+            const noise = audioCtx.createBufferSource();
+            noise.buffer = buffer;
+            noise.loop = true;
+            
+            const filter = audioCtx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 400; 
+            
+            const gain = audioCtx.createGain();
+            gain.gain.value = 0.2; // Gain 0.2
+            
+            noise.connect(filter).connect(gain).connect(audioCtx.destination);
+            noise.start();
+        }
+
+        function playPing() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(1200 + Math.random()*400, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+            
+            // 2. Capture Sound (小音量)
+            gain.gain.setValueAtTime(0.02, audioCtx.currentTime); // Gain 0.02
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+            
+            osc.connect(gain).connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }
+
+        document.getElementById('start-btn').addEventListener('click', () => {
+            document.getElementById('start-overlay').style.opacity = 0;
+            setTimeout(() => document.getElementById('start-overlay').remove(), 500);
+            animate();
+            initAudio();
+        });
+
+    </script>
+</body>
+</html>
